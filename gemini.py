@@ -2,12 +2,16 @@ import base64
 import json
 import os
 import traceback
+import uuid
 
 import google.generativeai as genai
 import httpx
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 app = Flask(__name__)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+GENERATED_IMAGE_DIR = os.path.join(BASE_DIR, "image", "recipe_api")
 
 FOOD_LIST = (
     "たまねぎ, にんじん, じゃがいも, キャベツ, ネギ, 大根, トマト, ピーマン, きゅうり, しょうが, "
@@ -87,6 +91,117 @@ def _generate_from_image_url(image_url: str) -> str:
     return response.text
 
 
+def _ensure_generated_dir() -> None:
+    os.makedirs(GENERATED_IMAGE_DIR, exist_ok=True)
+
+
+def _format_ingredients_payload(payload) -> list:
+    if isinstance(payload, dict):
+        items = []
+        for name, count in payload.items():
+            if name is None:
+                continue
+            name_str = str(name).strip()
+            if not name_str:
+                continue
+            try:
+                count_int = int(count)
+            except (TypeError, ValueError):
+                continue
+            if count_int <= 0:
+                continue
+            items.append((name_str, count_int))
+        return items
+    if isinstance(payload, list):
+        items = []
+        for entry in payload:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+                continue
+            name, count = entry[0], entry[1]
+            if name is None:
+                continue
+            name_str = str(name).strip()
+            if not name_str:
+                continue
+            try:
+                count_int = int(count)
+            except (TypeError, ValueError):
+                continue
+            if count_int <= 0:
+                continue
+            items.append((name_str, count_int))
+        return items
+    return []
+
+
+def _generate_image_from_ingredients(ingredients: list) -> str:
+    if not ingredients:
+        raise ValueError("ingredients is required")
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-2.5-flash-image")
+
+    lines = [f"- {name}: {count}個" for name, count in ingredients]
+    prompt = (
+        "以下の食材を使った料理の画像を1枚生成してください。\n"
+        "食材一覧:\n"
+        + "\n".join(lines)
+        + "\n\n"
+        "ルール:\n"
+        "- 料理だけを写し、文字やロゴは表示しない\n"
+        "- 写実的で美味しそうな料理写真にする\n"
+    )
+
+    response = model.generate_content(prompt)
+
+    for part in getattr(response, "parts", []):
+        if part.inline_data:
+            _ensure_generated_dir()
+            filename = f"{uuid.uuid4().hex}.jpg"
+            file_path = os.path.join(GENERATED_IMAGE_DIR, filename)
+            with open(file_path, "wb") as f:
+                f.write(part.inline_data.data)
+            return filename
+
+    raise RuntimeError("image generation failed")
+
+
+def _generate_image_from_dish_name(dish_name: str) -> str:
+    if not dish_name:
+        raise ValueError("dish is required")
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-2.5-flash-image")
+
+    prompt = (
+        f"{dish_name}の料理の画像を1枚生成してください。\n"
+        "ルール:\n"
+        "- 料理だけを写し、文字やロゴは表示しない\n"
+        "- 写実的で美味しそうな料理写真にする\n"
+    )
+
+    response = model.generate_content(prompt)
+
+    for part in getattr(response, "parts", []):
+        if part.inline_data:
+            _ensure_generated_dir()
+            filename = f"{uuid.uuid4().hex}.jpg"
+            file_path = os.path.join(GENERATED_IMAGE_DIR, filename)
+            with open(file_path, "wb") as f:
+                f.write(part.inline_data.data)
+            return filename
+
+    raise RuntimeError("image generation failed")
+
+
 @app.post("/gemini")
 def gemini_api():
     try:
@@ -111,6 +226,50 @@ def gemini_api():
 @app.get("/health")
 def health():
     return jsonify({"ok": True})
+
+
+@app.post("/ingredients-image")
+def ingredients_image():
+    try:
+        payload = request.get_json(silent=True)
+        if payload is None:
+            payload = {}
+
+        ingredients = _format_ingredients_payload(payload)
+        filename = _generate_image_from_ingredients(ingredients)
+
+        base_url = request.host_url.rstrip("/")
+        image_url = f"{base_url}/generated-images/{filename}"
+
+        return jsonify({"ok": True, "image_url": image_url})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 400
+
+
+@app.post("/dish-image")
+def dish_image():
+    try:
+        payload = request.get_json(silent=True)
+        if payload is None:
+            payload = {}
+
+        dish_name = (payload.get("dish") or "").strip()
+        filename = _generate_image_from_dish_name(dish_name)
+
+        base_url = request.host_url.rstrip("/")
+        image_url = f"{base_url}/generated-images/{filename}"
+
+        return jsonify({"ok": True, "image_url": image_url})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 400
+
+
+@app.get("/generated-images/<path:filename>")
+def generated_images(filename):
+    _ensure_generated_dir()
+    return send_from_directory(GENERATED_IMAGE_DIR, filename)
 
 
 if __name__ == "__main__":
