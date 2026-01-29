@@ -1,17 +1,19 @@
 <?php
-// Simple form to POST image URL to Render Gemini API.
+// Simple form to POST dish name to Gemini image API.
 
-$api_url = "https://cooking-ai-api-pieo.onrender.com/gemini";
+$api_url = "http://localhost:5000/dish-image";
 $result = null;
+$result_pretty = null;
 $error = null;
+$image_url = null;
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $image_url = trim($_POST["image_url"] ?? "");
+    $dish = trim($_POST["dish"] ?? "");
 
-    if ($image_url === "") {
-        $error = "画像URLを入力してください。";
+    if ($dish === "") {
+        $error = "料理名を入力してください。";
     } else {
-        $payload = json_encode(["url" => $image_url], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $payload = json_encode(["dish" => $dish], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
         $ch = curl_init($api_url);
         curl_setopt_array($ch, [
@@ -32,6 +34,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $error = "HTTPエラー: " . $http_code . " / " . $response;
         } else {
             $result = $response;
+            $decoded = json_decode($response, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $result_pretty = json_encode(
+                    $decoded,
+                    JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT
+                );
+                if (isset($decoded["image_url"])) {
+                    $image_url = $decoded["image_url"];
+                }
+            }
         }
     }
 }
@@ -40,7 +52,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <title>Gemini API POST Test</title>
+  <title>Dish Image API POST Test</title>
   <style>
     body { font-family: sans-serif; max-width: 820px; margin: 24px auto; padding: 0 16px; }
     label { display: block; margin-bottom: 6px; }
@@ -48,13 +60,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     button { margin-top: 12px; padding: 10px 16px; }
     pre { background: #f5f5f5; padding: 12px; overflow: auto; }
     .error { color: #b00020; margin-top: 12px; }
+    img { max-width: 100%; margin-top: 12px; display: block; }
   </style>
 </head>
 <body>
-  <h1>Gemini API POST テスト</h1>
+  <h1>料理名→画像 生成テスト</h1>
   <form method="post">
-    <label for="image_url">画像URL</label>
-    <input type="text" id="image_url" name="image_url" placeholder="https://example.com/image.jpg" value="<?php echo htmlspecialchars($_POST['image_url'] ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+    <label for="dish">料理名</label>
+    <input type="text" id="dish" name="dish" placeholder="カレーライス" value="<?php echo htmlspecialchars($_POST['dish'] ?? '', ENT_QUOTES, 'UTF-8'); ?>">
     <button type="submit">送信</button>
   </form>
 
@@ -62,9 +75,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
   <div class="error"><?php echo htmlspecialchars($error, ENT_QUOTES, 'UTF-8'); ?></div>
 <?php endif; ?>
 
+<?php if ($image_url): ?>
+  <h2>生成画像</h2>
+  <img src="<?php echo htmlspecialchars($image_url, ENT_QUOTES, 'UTF-8'); ?>" alt="generated">
+<?php endif; ?>
+
 <?php if ($result): ?>
   <h2>レスポンス</h2>
-  <pre><?php echo htmlspecialchars($result, ENT_QUOTES, 'UTF-8'); ?></pre>
+  <pre><?php echo htmlspecialchars($result_pretty ?? $result, ENT_QUOTES, 'UTF-8'); ?></pre>
 <?php endif; ?>
 </body>
 </html>
